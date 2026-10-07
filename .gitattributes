@@ -3,3 +3,4 @@
 *.woff binary
 *.ico binary
 *.exe binary
+apps/web/public/templates/*.csv -text
