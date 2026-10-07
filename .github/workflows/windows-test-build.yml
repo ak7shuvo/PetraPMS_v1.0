@@ -26,7 +26,7 @@ jobs:
         run: |
           node scripts/dist-win.mjs --test 2>&1 | Tee-Object -FilePath pack.log
           if ($LASTEXITCODE -ne 0) {
-            $t = ((Get-Content pack.log -Tail 45) -join "`n").Replace("%","%25").Replace("`r","").Replace("`n","%0A")
+            $t = ((Get-Content pack.log | Where-Object { $_.Trim() -ne "" -and $_ -notmatch "Command line defined" } | Select-Object -Last 40) -join "`n").Replace("%","%25").Replace("`r","").Replace("`n","%0A")
             Write-Output "::error title=Packaging failed::$t"
             exit 1
           }

@@ -10,7 +10,7 @@ export function verifyInstaller() {
   const yml = fs.readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf8");
   const code = nsh.split(/\r?\n/).filter((l) => !l.trim().startsWith(";") && !/^\s*MessageBox/i.test(l));
   for (const l of code) {
-    if (/(RMDir|Delete|rd |rmdir|del |RemoveDirectory|Rename|CopyFiles)/i.test(l) && /(COMMONPROGRAMDATA|ProgramData|PETRA_DATA)/i.test(l)) problems.push(`installer.nsh touches the data folder destructively: ${l.trim()}`);
+    if (/(RMDir|Delete|rd |rmdir|del |RemoveDirectory|Rename|CopyFiles)/i.test(l) && /(COMMONPROGRAMDATA|ProgramData|PETRA_DATA|PetraData)/i.test(l)) problems.push(`installer.nsh touches the data folder destructively: ${l.trim()}`);
   }
   if (!/deleteAppDataOnUninstall:\s*false/.test(yml)) problems.push("electron-builder.yml must set nsis.deleteAppDataOnUninstall: false");
   if (!/perMachine:\s*true/.test(yml)) problems.push("installer must be per-machine");
