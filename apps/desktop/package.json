@@ -17,7 +17,7 @@
     "electron-updater": "^6.6.2"
   },
   "devDependencies": {
-    "electron": "^38.0.0",
+    "electron": "38.8.6",
     "electron-builder": "^26.0.12",
     "node-windows": "^1.0.0-beta.8"
   }
