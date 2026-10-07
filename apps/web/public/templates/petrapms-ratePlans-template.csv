@@ -1,0 +1,2 @@
+﻿code,name,type,mealPlan,mealPricePerAdult,mealPricePerChild,adjustmentType,adjustmentValue,weekendAdjustment,minStay,cancellationPolicyCode,active
+BB,Bed & Breakfast,PACKAGE,BB,450.00,250.00,PERCENT,-10,10,1,FLEX24,yes

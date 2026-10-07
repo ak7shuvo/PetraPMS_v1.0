@@ -1,0 +1,16 @@
+node_modules
+.next
+dist
+.data
+test-results
+playwright-report
+apps/desktop/stage
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+# License PRIVATE key must never be committed or shipped
+tools/license-keygen/keys/
+tools/license-keygen/ledger.json
+apps/desktop/src/release.json
+apps/desktop/vendor

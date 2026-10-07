@@ -1,0 +1,6 @@
+{
+  "_comment": "Vendor release configuration. The strings starting with __SET_ are deliberate placeholders: `pnpm build:win` / `pnpm release:check` FAIL until real values are supplied. Do not invent values. Environment variables PETRA_UPDATE_URL and PETRA_HOMEPAGE override these (for CI). See docs/RELEASE.md.",
+  "updateUrl": "__SET_PRODUCTION_UPDATE_FEED_HTTPS_URL__",
+  "homepage": "__SET_PRODUCTION_WEBSITE_HTTPS_URL__",
+  "iconApproved": false
+}

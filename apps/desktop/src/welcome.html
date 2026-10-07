@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>PetraPMS setup</title>
+<style>
+body{margin:0;font:14px/1.5 "JetBrains Mono",Consolas,monospace;background:#F6F1E7;color:#1A1A1A;padding:28px}
+h1{font-size:20px;margin:0 0 4px} p{color:#6B6B6B;margin:0 0 16px}
+label{display:block;border:1px solid #E4DCCB;background:#fff;border-radius:8px;padding:12px 14px;margin:8px 0;cursor:pointer}
+label:has(input:checked){border-color:#C8102E;box-shadow:0 0 0 1px #C8102E}
+b{display:block} small{color:#6B6B6B}
+input[type=text]{width:100%;box-sizing:border-box;padding:10px;border:1px solid #E4DCCB;border-radius:6px;margin-top:8px;font:inherit}
+button{background:#C8102E;color:#fff;border:0;border-radius:8px;padding:12px 22px;font:inherit;min-height:44px;cursor:pointer;margin-top:12px}
+#err{color:#C8102E;margin-top:8px}
+</style></head><body>
+<h1>Welcome to PetraPMS</h1><p>How will this computer be used? You can change this later in Settings.</p>
+<label><input type="radio" name="m" value="standalone" checked> <b>Single computer</b><small>Everything runs on this computer (front desk in a small hotel).</small></label>
+<label><input type="radio" name="m" value="server"> <b>Server for other computers</b><small>This computer hosts the data. Other front-desk PCs and tablets connect over the hotel network. A Windows Service and firewall rule are set up (asks for administrator permission).</small></label>
+<label><input type="radio" name="m" value="terminal"> <b>Terminal</b><small>Connect to the PetraPMS server already running in your hotel.</small>
+<input type="text" id="url" placeholder="http://192.168.1.10:38080" style="display:none"></label>
+<button id="go">Continue</button><div id="err"></div>
+<script>
+const url=document.getElementById("url");
+document.querySelectorAll("input[name=m]").forEach(r=>r.addEventListener("change",()=>{url.style.display=document.querySelector("input[name=m]:checked").value==="terminal"?"block":"none"}));
+document.getElementById("go").onclick=async()=>{const m=document.querySelector("input[name=m]:checked").value;const r=await welcome.choose(m,url.value.trim());if(r&&r.error)document.getElementById("err").textContent=r.error;};
+</script></body></html>

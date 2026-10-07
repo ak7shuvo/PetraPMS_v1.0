@@ -1,0 +1,8 @@
+**/node_modules
+**/.next
+.git
+dist
+.data
+test-results
+apps/desktop/stage
+tools/license-keygen/keys

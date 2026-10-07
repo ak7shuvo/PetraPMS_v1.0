@@ -1,0 +1,31 @@
+name: Windows test installer (unsigned)
+# Builds PetraPMS-Setup-TEST-UNSIGNED-<version>.exe on a Windows runner for testing on a real Windows machine.
+# It uses the DEVELOPMENT license key and has no update feed, so it is NOT a customer release.
+# Customer releases use release-windows.yml (tag v*), which is guarded by `pnpm release:check`.
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+jobs:
+  win-test-installer:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Build web app and stage it
+        run: node scripts/build.mjs
+      - name: Smoke test the staged bundle on Windows (server starts, setup, login, PDF, backup)
+        run: node scripts/stage-check.mjs
+        continue-on-error: true
+      - name: Package unsigned test installer
+        run: node scripts/dist-win.mjs --test
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PetraPMS-Setup-TEST-UNSIGNED
+          path: dist/*.exe
+          if-no-files-found: error

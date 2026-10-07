@@ -1,0 +1,27 @@
+name: Windows release
+on:
+  push: { tags: ["v*"] }
+  workflow_dispatch:
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build:win
+        env:
+          # Optional code signing (see docs/CODE-SIGNING.md). Leave unset for an unsigned build.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      - run: pnpm build:portable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PetraPMS-windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/latest.yml

@@ -1,0 +1,6 @@
+.next
+dist
+node_modules
+pnpm-lock.yaml
+**/migrations.generated.ts
+apps/web/src/messages

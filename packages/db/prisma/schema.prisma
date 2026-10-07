@@ -1,0 +1,964 @@
+// PetraPMS data model (SQLite = default on-premise provider).
+// The PostgreSQL schema (schema.postgres.prisma) is GENERATED from this file by scripts/generate.mjs.
+// Conventions:
+//   * money: Int poisha (1 BDT = 100 poisha). Never Float/Decimal.
+//   * business dates: String "YYYY-MM-DD" (hotel business date, independent of the calendar/timezone).
+//   * "version" columns are used for optimistic locking.
+//   * isDemo / importBatchId mark demo and imported rows so they can be cleared or undone.
+//   * No database enums (portable across providers): allowed values are documented and validated in code.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/sqlite"
+  engineType   = "client"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ───────────────────────────── system ─────────────────────────────
+
+model Hotel {
+  id            String   @id @default("hotel")
+  name          String
+  legalName     String   @default("")
+  address       String   @default("")
+  city          String   @default("")
+  country       String   @default("BD")
+  phone         String   @default("")
+  email         String   @default("")
+  website       String   @default("")
+  bin           String   @default("") // VAT Business Identification Number
+  tradeLicense  String   @default("")
+  logo          String   @default("") // data URL
+  checkInTime   String   @default("14:00")
+  checkOutTime  String   @default("12:00")
+  timezone      String   @default("Asia/Dhaka")
+  currency      String   @default("BDT")
+  usdRate       Int      @default(12000) // poisha per 1 USD for optional USD display
+  showUsd       Boolean  @default(false)
+  setupComplete Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  updatedById   String?
+}
+
+model BusinessDate {
+  id         String    @id @default(cuid())
+  date       String    @unique
+  status     String    @default("OPEN") // OPEN | CLOSED
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+  closedById String?
+}
+
+model Setting {
+  key         String   @id
+  value       String // JSON
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+model Sequence {
+  name  String @id
+  value Int    @default(0)
+}
+
+model Permission {
+  code   String           @id
+  module String
+  label  String
+  roles  RolePermission[]
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  name        String
+  nameBn      String           @default("")
+  builtin     Boolean          @default(false)
+  permissions RolePermission[]
+  users       User[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model RolePermission {
+  roleId         String
+  permissionCode String
+  role           Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission     Permission @relation(fields: [permissionCode], references: [code], onDelete: Cascade)
+
+  @@id([roleId, permissionCode])
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  username           String              @unique
+  fullName           String
+  email              String              @default("")
+  phone              String              @default("")
+  roleId             String
+  role               Role                @relation(fields: [roleId], references: [id])
+  passwordHash       String
+  pinHash            String?
+  mustChangePassword Boolean             @default(false)
+  active             Boolean             @default(true)
+  failedAttempts     Int                 @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  locale             String              @default("en") // en | bn
+  banglaDigits       Boolean             @default(false)
+  uiScale            Int                 @default(100)
+  theme              String              @default("light") // light | dark | system
+  discountLimitBp    Int                 @default(1000) // max discount without approval
+  isDemo             Boolean             @default(false)
+  importBatchId      String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  createdById        String?
+  updatedById        String?
+  deletedAt          DateTime?
+  sessions           UserWindowSession[]
+  workspaces         SavedWorkspace[]
+  hkTasks            HousekeepingTask[]  @relation("HkAssignee")
+  tickets            MaintenanceTicket[] @relation("TicketAssignee")
+}
+
+// One row per signed-in window/tab. Authentication is window-scoped: two windows can hold two users.
+model UserWindowSession {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  windowId    String
+  terminalId  String
+  deviceLabel String    @default("")
+  ip          String    @default("")
+  userAgent   String    @default("")
+  createdAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  expiresAt   DateTime
+  revokedAt   DateTime?
+
+  @@index([userId])
+  @@index([terminalId])
+  @@index([lastSeenAt])
+}
+
+model SavedWorkspace {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  layout    String // JSON: [{ path, screenId, screenLabel, bounds:{x,y,width,height} }]
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  at           DateTime @default(now())
+  businessDate String   @default("")
+  userId       String?
+  username     String   @default("system")
+  action       String
+  entity       String   @default("")
+  entityId     String   @default("")
+  before       String? // JSON
+  after        String? // JSON
+  reason       String   @default("")
+  ip           String   @default("")
+  terminalId   String   @default("")
+
+  @@index([at])
+  @@index([entity, entityId])
+  @@index([action])
+}
+
+model ImportBatch {
+  id          String    @id @default(cuid())
+  entity      String
+  fileName    String
+  mode        String // ALL_OR_NOTHING | SKIP_INVALID
+  strategy    String // CREATE | UPDATE | UPSERT
+  status      String    @default("COMPLETED") // COMPLETED | UNDONE | FAILED
+  total       Int       @default(0)
+  created     Int       @default(0)
+  updated     Int       @default(0)
+  skipped     Int       @default(0)
+  undoData    String    @default("[]") // JSON [{ op, model, id, before }]
+  createdById String?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  undoneAt    DateTime?
+  undoneById  String?
+}
+
+model BackupRecord {
+  id            String   @id @default(cuid())
+  fileName      String
+  path          String
+  sizeBytes     Int      @default(0)
+  kind          String // AUTO | MANUAL | PRE_MIGRATION | PRE_UPDATE | PRE_RESTORE | PRE_IMPORT
+  encrypted     Boolean  @default(false)
+  sha256        String   @default("")
+  schemaVersion String   @default("")
+  appVersion    String   @default("")
+  status        String   @default("OK") // OK | FAILED
+  error         String   @default("")
+  createdAt     DateTime @default(now())
+  createdById   String?
+}
+
+model License {
+  id          String    @id @default("license")
+  key         String    @default("")
+  payload     String    @default("{}") // verified JSON payload
+  status      String    @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | INVALID | READ_ONLY
+  fingerprint String    @default("")
+  activatedAt DateTime?
+  updatedAt   DateTime  @updatedAt
+}
+
+model Notification {
+  id           String    @id @default(cuid())
+  channel      String // EMAIL | SMS | WHATSAPP
+  to           String
+  templateCode String    @default("")
+  locale       String    @default("en")
+  subject      String    @default("")
+  body         String
+  status       String    @default("QUEUED") // QUEUED | SENT | FAILED | CANCELLED
+  attempts     Int       @default(0)
+  lastError    String    @default("")
+  sendAfter    DateTime  @default(now())
+  sentAt       DateTime?
+  entity       String    @default("")
+  entityId     String    @default("")
+  createdAt    DateTime  @default(now())
+
+  @@index([status, sendAfter])
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  prefix      String    @unique
+  keyHash     String
+  scopes      String    @default("[\"pos\"]")
+  active      Boolean   @default(true)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  createdById String?
+}
+
+model ShiftNote {
+  id             String   @id @default(cuid())
+  businessDate   String
+  shift          String   @default("") // MORNING | EVENING | NIGHT
+  department     String   @default("FRONT_DESK")
+  text           String
+  authorId       String?
+  authorName     String   @default("")
+  acknowledgedBy String   @default("[]") // JSON [{ userId, name, at }]
+  createdAt      DateTime @default(now())
+
+  @@index([businessDate])
+}
+
+// ───────────────────────────── configuration masters ─────────────────────────────
+
+model PaymentMethod {
+  id            String   @id @default(cuid())
+  code          String   @unique // CASH | CARD | BKASH | NAGAD | BANK | CITY_LEDGER | ...
+  name          String
+  nameBn        String   @default("")
+  type          String   @default("OTHER") // CASH | CARD | MOBILE | BANK | CITY_LEDGER | OTHER
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  isDemo        Boolean  @default(false)
+  importBatchId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model TaxRule {
+  id            String   @id @default(cuid())
+  code          String   @unique // VAT | SC | ...
+  name          String
+  nameBn        String   @default("")
+  rateBp        Int // basis points: 1500 = 15%
+  base          String   @default("NET") // NET | NET_PLUS_PREVIOUS (compound on earlier rules)
+  appliesTo     String   @default("[\"*\"]") // JSON list of charge categories or "*"
+  sortOrder     Int      @default(0)
+  active        Boolean  @default(true)
+  isDemo        Boolean  @default(false)
+  importBatchId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model ChargeCode {
+  id            String        @id @default(cuid())
+  code          String        @unique
+  name          String
+  nameBn        String        @default("")
+  category      String // ROOM | EXTRA_BED | FNB | LAUNDRY | MINIBAR | TRANSPORT | TOUR | MISC | ADJUSTMENT
+  defaultAmount Int           @default(0)
+  taxable       Boolean       @default(true)
+  active        Boolean       @default(true)
+  sortOrder     Int           @default(0)
+  isDemo        Boolean       @default(false)
+  importBatchId String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  charges       FolioCharge[]
+}
+
+model Amenity {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  name          String
+  nameBn        String   @default("")
+  isDemo        Boolean  @default(false)
+  importBatchId String?
+  createdAt     DateTime @default(now())
+}
+
+model CancellationPolicy {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  name           String
+  description    String     @default("")
+  freeUntilHours Int        @default(24) // free cancellation until N hours before arrival (check-in time)
+  penaltyType    String     @default("FIRST_NIGHT") // NONE | FIRST_NIGHT | PERCENT | FULL
+  penaltyValue   Int        @default(0) // bp when PERCENT
+  noShowType     String     @default("FIRST_NIGHT")
+  active         Boolean    @default(true)
+  isDemo         Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  ratePlans      RatePlan[]
+}
+
+model DiscountRule {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  type             String   @default("PERCENT") // PERCENT | AMOUNT
+  value            Int // bp or poisha
+  requiresApproval Boolean  @default(false)
+  active           Boolean  @default(true)
+  isDemo           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Staff {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  fullName      String
+  department    String   @default("") // FRONT_OFFICE | HOUSEKEEPING | MAINTENANCE | FNB | ACCOUNTS | SECURITY
+  designation   String   @default("")
+  phone         String   @default("")
+  userId        String?
+  active        Boolean  @default(true)
+  isDemo        Boolean  @default(false)
+  importBatchId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ───────────────────────────── rooms & rates ─────────────────────────────
+
+model RoomType {
+  id             String             @id @default(cuid())
+  code           String             @unique
+  name           String
+  nameBn         String             @default("")
+  description    String             @default("")
+  baseOccupancy  Int                @default(2)
+  maxAdults      Int                @default(2)
+  maxChildren    Int                @default(1)
+  maxOccupancy   Int                @default(3)
+  bedType        String             @default("DOUBLE") // SINGLE | DOUBLE | TWIN | QUEEN | KING | TRIPLE
+  amenities      String             @default("[]") // JSON amenity codes
+  photos         String             @default("[]") // JSON stored file names
+  baseRate       Int // poisha per night
+  extraAdultRate Int                @default(0)
+  extraChildRate Int                @default(0)
+  extraBedRate   Int                @default(0)
+  sortOrder      Int                @default(0)
+  active         Boolean            @default(true)
+  isDemo         Boolean            @default(false)
+  importBatchId  String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  createdById    String?
+  updatedById    String?
+  rooms          Room[]
+  planRates      RatePlanRoomType[]
+  seasons        RateSeason[]
+  reservedRooms  ReservationRoom[]
+}
+
+model Room {
+  id            String              @id @default(cuid())
+  number        String              @unique
+  floor         String              @default("1")
+  roomTypeId    String
+  roomType      RoomType            @relation(fields: [roomTypeId], references: [id])
+  hkStatus      String              @default("CLEAN") // CLEAN | DIRTY | IN_PROGRESS | INSPECTED
+  features      String              @default("") // e.g. "Sea view, Balcony"
+  notes         String              @default("")
+  active        Boolean             @default(true)
+  sortOrder     Int                 @default(0)
+  version       Int                 @default(0)
+  isDemo        Boolean             @default(false)
+  importBatchId String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  createdById   String?
+  updatedById   String?
+  blocks        RoomBlock[]
+  assignments   ReservationRoom[]
+  hkTasks       HousekeepingTask[]
+  tickets       MaintenanceTicket[]
+  lostFound     LostFound[]
+  moves         RoomMove[]          @relation("MoveTo")
+
+  @@index([roomTypeId])
+  @@index([floor])
+}
+
+// Periods when a room cannot be sold. endDate is exclusive (like departure dates).
+model RoomBlock {
+  id          String    @id @default(cuid())
+  roomId      String
+  room        Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  type        String // OUT_OF_ORDER | MAINTENANCE | HOUSE_USE | BLOCK
+  startDate   String
+  endDate     String
+  reason      String    @default("")
+  ticketId    String?
+  isDemo      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  createdById String?
+  releasedAt  DateTime?
+
+  @@index([roomId, startDate, endDate])
+}
+
+model RatePlan {
+  id                   String              @id @default(cuid())
+  code                 String              @unique
+  name                 String
+  nameBn               String              @default("")
+  type                 String              @default("RACK") // RACK | CORPORATE | WEEKEND | SEASONAL | PACKAGE | WALKIN | OTA
+  mealPlan             String              @default("RO") // RO | BB | HB | FB
+  mealPricePerAdult    Int                 @default(0) // poisha per adult per night (added to room rate)
+  mealPricePerChild    Int                 @default(0)
+  adjustmentType       String              @default("NONE") // NONE | PERCENT | AMOUNT (applied to room type base rate)
+  adjustmentValue      Int                 @default(0) // bp or poisha (may be negative)
+  weekendDays          String              @default("[5,6]") // JSON day numbers 0=Sun; BD weekend Fri/Sat
+  weekendAdjustmentBp  Int                 @default(0)
+  minStay              Int                 @default(1)
+  maxStay              Int                 @default(0) // 0 = no maximum
+  companyId            String?
+  cancellationPolicyId String?
+  cancellationPolicy   CancellationPolicy? @relation(fields: [cancellationPolicyId], references: [id])
+  description          String              @default("")
+  active               Boolean             @default(true)
+  isDemo               Boolean             @default(false)
+  importBatchId        String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  createdById          String?
+  updatedById          String?
+  roomRates            RatePlanRoomType[]
+  seasons              RateSeason[]
+}
+
+// Optional explicit nightly rate of a room type on a rate plan (overrides base rate + plan adjustment).
+model RatePlanRoomType {
+  id             String   @id @default(cuid())
+  ratePlanId     String
+  roomTypeId     String
+  ratePlan       RatePlan @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+  roomType       RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  rate           Int
+  extraAdultRate Int?
+  extraChildRate Int?
+  extraBedRate   Int?
+
+  @@unique([ratePlanId, roomTypeId])
+}
+
+// Date-range price changes (seasons, events). endDate inclusive.
+model RateSeason {
+  id             String    @id @default(cuid())
+  name           String
+  ratePlanId     String?
+  roomTypeId     String?
+  ratePlan       RatePlan? @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+  roomType       RoomType? @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  startDate      String
+  endDate        String
+  adjustmentType String    @default("PERCENT") // PERCENT | AMOUNT | FIXED
+  value          Int // bp, poisha delta, or fixed poisha rate
+  daysOfWeek     String    @default("[0,1,2,3,4,5,6]")
+  minStay        Int       @default(0)
+  priority       Int       @default(0)
+  active         Boolean   @default(true)
+  isDemo         Boolean   @default(false)
+  importBatchId  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([startDate, endDate])
+}
+
+// ───────────────────────────── guests & companies ─────────────────────────────
+
+model Company {
+  id               String        @id @default(cuid())
+  code             String        @unique
+  name             String
+  contactPerson    String        @default("")
+  phone            String        @default("")
+  email            String        @default("")
+  address          String        @default("")
+  bin              String        @default("")
+  creditLimit      Int           @default(0)
+  paymentTermsDays Int           @default(30)
+  ratePlanId       String?
+  discountBp       Int           @default(0)
+  cityLedger       Boolean       @default(true)
+  notes            String        @default("")
+  active           Boolean       @default(true)
+  isDemo           Boolean       @default(false)
+  importBatchId    String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdById      String?
+  updatedById      String?
+  deletedAt        DateTime?
+  guests           Guest[]
+  reservations     Reservation[]
+  folios           Folio[]
+}
+
+model Guest {
+  id               String            @id @default(cuid())
+  code             String            @unique
+  title            String            @default("") // Mr | Mrs | Ms | Dr
+  firstName        String
+  lastName         String            @default("")
+  fullName         String
+  phone            String            @default("") // normalized +880...
+  email            String            @default("")
+  gender           String            @default("") // M | F | O
+  dateOfBirth      String            @default("")
+  nationality      String            @default("BD") // ISO 3166 alpha-2
+  idType           String            @default("") // NID | PASSPORT | DRIVING_LICENSE | BIRTH_CERT | OTHER
+  idNumber         String            @default("")
+  idImage          String            @default("") // stored file name in uploads/
+  idImageBack      String            @default("")
+  photo            String            @default("")
+  passportNumber   String            @default("")
+  passportExpiry   String            @default("")
+  passportIssuedAt String            @default("")
+  visaNumber       String            @default("")
+  visaType         String            @default("")
+  visaExpiry       String            @default("")
+  arrivalFrom      String            @default("")
+  arrivalDateBd    String            @default("") // date of arrival in Bangladesh (foreigners)
+  portOfEntry      String            @default("")
+  purposeOfVisit   String            @default("")
+  occupation       String            @default("")
+  address          String            @default("")
+  city             String            @default("")
+  country          String            @default("BD")
+  companyId        String?
+  company          Company?          @relation(fields: [companyId], references: [id])
+  vip              Int               @default(0) // 0 none, 1-3 VIP level
+  blacklisted      Boolean           @default(false)
+  blacklistReason  String            @default("")
+  preferences      String            @default("") // free text (room preference, pillow, diet)
+  notes            String            @default("")
+  loyaltyPoints    Int               @default(0)
+  marketingOptIn   Boolean           @default(false)
+  totalStays       Int               @default(0)
+  totalNights      Int               @default(0)
+  totalSpend       Int               @default(0)
+  lastStayAt       String            @default("")
+  isDemo           Boolean           @default(false)
+  importBatchId    String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  createdById      String?
+  updatedById      String?
+  deletedAt        DateTime?
+  reservations     Reservation[]
+  stays            ReservationRoom[]
+  folios           Folio[]
+
+  @@index([phone])
+  @@index([fullName])
+  @@index([idNumber])
+  @@index([email])
+}
+
+// ───────────────────────────── reservations ─────────────────────────────
+
+model Reservation {
+  id                 String            @id @default(cuid())
+  confirmationNo     String            @unique
+  status             String            @default("CONFIRMED") // TENTATIVE | CONFIRMED | CHECKED_IN | CHECKED_OUT | CANCELLED | NO_SHOW | WAITLIST
+  source             String            @default("WALK_IN") // WALK_IN | PHONE | WEBSITE | OTA | CORPORATE | AGENT | EMAIL
+  sourceRef          String            @default("") // OTA / agent booking reference
+  agentName          String            @default("")
+  guestId            String
+  guest              Guest             @relation(fields: [guestId], references: [id])
+  companyId          String?
+  company            Company?          @relation(fields: [companyId], references: [id])
+  isGroup            Boolean           @default(false)
+  groupName          String            @default("")
+  arrivalDate        String
+  departureDate      String
+  adults             Int               @default(1)
+  children           Int               @default(0)
+  ratePlanId         String?
+  eta                String            @default("")
+  specialRequests    String            @default("")
+  notes              String            @default("")
+  depositRequired    Int               @default(0)
+  paymentTerms       String            @default("GUEST") // GUEST | COMPANY (room charges to company city ledger)
+  cancellationPolicy String            @default("{}") // JSON snapshot
+  cancelledAt        DateTime?
+  cancelReason       String            @default("")
+  cancellationFee    Int               @default(0)
+  noShowAt           DateTime?
+  version            Int               @default(0)
+  isDemo             Boolean           @default(false)
+  importBatchId      String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  createdById        String?
+  updatedById        String?
+  rooms              ReservationRoom[]
+  folios             Folio[]
+
+  @@index([arrivalDate])
+  @@index([departureDate])
+  @@index([status])
+  @@index([guestId])
+}
+
+model ReservationRoom {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  roomTypeId    String
+  roomType      RoomType    @relation(fields: [roomTypeId], references: [id])
+  roomId        String?
+  room          Room?       @relation(fields: [roomId], references: [id])
+  guestId       String?
+  guest         Guest?      @relation(fields: [guestId], references: [id])
+  arrivalDate   String
+  departureDate String // exclusive (check-out date)
+  adults        Int         @default(1)
+  children      Int         @default(0)
+  extraBeds     Int         @default(0)
+  ratePlanId    String?
+  nightlyRates  String      @default("[]") // JSON [{ date, amount }] locked at booking (poisha, incl. extras & meals, before tax)
+  rateOverride  Boolean     @default(false)
+  discountBp    Int         @default(0)
+  status        String      @default("RESERVED") // RESERVED | CHECKED_IN | CHECKED_OUT | CANCELLED | NO_SHOW | WAITLIST
+  checkedInAt   DateTime?
+  checkedOutAt  DateTime?
+  earlyCheckIn  Boolean     @default(false)
+  lateCheckOut  String      @default("") // "" or HH:MM
+  version       Int         @default(0)
+  isDemo        Boolean     @default(false)
+  importBatchId String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  folios        Folio[]
+  moves         RoomMove[]
+
+  @@index([arrivalDate, departureDate])
+  @@index([roomId, arrivalDate, departureDate])
+  @@index([roomTypeId, arrivalDate, departureDate])
+  @@index([status])
+}
+
+model RoomMove {
+  id                String          @id @default(cuid())
+  reservationRoomId String
+  reservationRoom   ReservationRoom @relation(fields: [reservationRoomId], references: [id], onDelete: Cascade)
+  fromRoomId        String?
+  toRoomId          String?
+  toRoom            Room?           @relation("MoveTo", fields: [toRoomId], references: [id])
+  businessDate      String
+  reason            String          @default("")
+  movedById         String?
+  createdAt         DateTime        @default(now())
+}
+
+// ───────────────────────────── folios & billing ─────────────────────────────
+
+model Folio {
+  id                String           @id @default(cuid())
+  number            String           @unique
+  type              String           @default("GUEST") // GUEST | MASTER | COMPANY | WALK_IN (non-resident/house)
+  name              String
+  status            String           @default("OPEN") // OPEN | SETTLED | CLOSED
+  reservationId     String?
+  reservation       Reservation?     @relation(fields: [reservationId], references: [id])
+  reservationRoomId String?
+  reservationRoom   ReservationRoom? @relation(fields: [reservationRoomId], references: [id])
+  guestId           String?
+  guest             Guest?           @relation(fields: [guestId], references: [id])
+  companyId         String?
+  company           Company?         @relation(fields: [companyId], references: [id])
+  parentFolioId     String? // split folios point to their master
+  routing           String           @default("[]") // JSON charge categories routed to this folio
+  cityLedger        Boolean          @default(false) // transferred to company accounts receivable
+  dueDate           String           @default("")
+  version           Int              @default(0)
+  isDemo            Boolean          @default(false)
+  importBatchId     String?
+  openedAt          DateTime         @default(now())
+  closedAt          DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  createdById       String?
+  updatedById       String?
+  charges           FolioCharge[]
+  payments          Payment[]
+  invoices          Invoice[]
+
+  @@index([reservationId])
+  @@index([status])
+  @@index([companyId])
+}
+
+model FolioCharge {
+  id                String     @id @default(cuid())
+  folioId           String
+  folio             Folio      @relation(fields: [folioId], references: [id])
+  businessDate      String
+  chargeCodeId      String
+  chargeCode        ChargeCode @relation(fields: [chargeCodeId], references: [id])
+  category          String
+  description       String
+  quantity          Int        @default(1)
+  unitAmount        Int
+  amount            Int // net (excluding tax)
+  serviceCharge     Int        @default(0)
+  vat               Int        @default(0)
+  otherTax          Int        @default(0)
+  total             Int
+  taxDetail         String     @default("[]") // JSON [{ code, rateBp, amount }]
+  taxMode           String     @default("EXCLUSIVE")
+  source            String     @default("MANUAL") // MANUAL | NIGHT_AUDIT | POS | HOUSEKEEPING | SYSTEM | TRANSFER | IMPORT
+  sourceRef         String     @default("")
+  reservationRoomId String?
+  roomNumber        String     @default("")
+  isAdjustment      Boolean    @default(false)
+  reason            String     @default("")
+  approvedById      String?
+  voidedAt          DateTime?
+  voidedById        String?
+  voidReason        String     @default("")
+  transferredFrom   String? // source folio id when moved
+  isDemo            Boolean    @default(false)
+  importBatchId     String?
+  createdAt         DateTime   @default(now())
+  createdById       String?
+
+  @@index([folioId])
+  @@index([businessDate])
+  @@index([category])
+  @@index([sourceRef])
+}
+
+model Payment {
+  id            String    @id @default(cuid())
+  folioId       String
+  folio         Folio     @relation(fields: [folioId], references: [id])
+  businessDate  String
+  type          String    @default("PAYMENT") // PAYMENT | REFUND | DEPOSIT
+  method        String // payment method code
+  amount        Int // positive; refunds are stored positive with type REFUND
+  currency      String    @default("BDT")
+  foreignAmount Int       @default(0) // e.g. USD cents when paid in foreign currency
+  reference     String    @default("") // card slip / bKash trx id / cheque
+  notes         String    @default("")
+  receiptNo     String    @unique
+  voidedAt      DateTime?
+  voidedById    String?
+  voidReason    String    @default("")
+  isDemo        Boolean   @default(false)
+  importBatchId String?
+  createdAt     DateTime  @default(now())
+  createdById   String?
+
+  @@index([folioId])
+  @@index([businessDate])
+  @@index([method])
+}
+
+model Invoice {
+  id            String    @id @default(cuid())
+  number        String    @unique
+  folioId       String
+  folio         Folio     @relation(fields: [folioId], references: [id])
+  businessDate  String
+  issuedAt      DateTime  @default(now())
+  billToName    String
+  billToAddress String    @default("")
+  billToBin     String    @default("")
+  subtotal      Int
+  serviceCharge Int       @default(0)
+  vat           Int       @default(0)
+  otherTax      Int       @default(0)
+  total         Int
+  paid          Int       @default(0)
+  balance       Int       @default(0)
+  snapshot      String // JSON of lines, hotel and guest at issue time
+  voidedAt      DateTime?
+  voidReason    String    @default("")
+  isDemo        Boolean   @default(false)
+  createdById   String?
+
+  @@index([businessDate])
+}
+
+// ───────────────────────────── housekeeping & maintenance ─────────────────────────────
+
+model HousekeepingTask {
+  id            String    @id @default(cuid())
+  roomId        String
+  room          Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  businessDate  String
+  type          String // CHECKOUT_CLEAN | STAYOVER | DEEP_CLEAN | TURNDOWN | INSPECTION | CUSTOM
+  status        String    @default("PENDING") // PENDING | IN_PROGRESS | DONE | INSPECTED | SKIPPED
+  priority      Int       @default(2) // 1 high, 2 normal, 3 low
+  assignedToId  String?
+  assignedTo    User?     @relation("HkAssignee", fields: [assignedToId], references: [id])
+  notes         String    @default("")
+  startedAt     DateTime?
+  completedAt   DateTime?
+  inspectedAt   DateTime?
+  inspectedById String?
+  minutes       Int       @default(0)
+  version       Int       @default(0)
+  isDemo        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  createdById   String?
+
+  @@index([businessDate, status])
+  @@index([roomId])
+}
+
+model LinenItem {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  par       Int      @default(0)
+  inStore   Int      @default(0)
+  inUse     Int      @default(0)
+  inLaundry Int      @default(0)
+  damaged   Int      @default(0)
+  isDemo    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+model LostFound {
+  id          String    @id @default(cuid())
+  itemNo      String    @unique
+  foundAt     DateTime  @default(now())
+  roomId      String?
+  room        Room?     @relation(fields: [roomId], references: [id])
+  location    String    @default("")
+  description String
+  foundBy     String    @default("")
+  status      String    @default("STORED") // STORED | RETURNED | DISPOSED
+  guestName   String    @default("")
+  returnedAt  DateTime?
+  returnedTo  String    @default("")
+  notes       String    @default("")
+  isDemo      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  createdById String?
+}
+
+model MaintenanceTicket {
+  id           String    @id @default(cuid())
+  number       String    @unique
+  roomId       String?
+  room         Room?     @relation(fields: [roomId], references: [id])
+  area         String    @default("")
+  title        String
+  description  String    @default("")
+  category     String    @default("GENERAL") // ELECTRICAL | PLUMBING | AC | FURNITURE | IT | GENERAL
+  priority     String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status       String    @default("OPEN") // OPEN | IN_PROGRESS | ON_HOLD | RESOLVED | CLOSED
+  assignedToId String?
+  assignedTo   User?     @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  photos       String    @default("[]")
+  slaDueAt     DateTime
+  resolvedAt   DateTime?
+  closedAt     DateTime?
+  resolution   String    @default("")
+  blockId      String?
+  scheduleId   String?
+  version      Int       @default(0)
+  isDemo       Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  createdById  String?
+
+  @@index([status])
+  @@index([roomId])
+}
+
+model PreventiveSchedule {
+  id           String   @id @default(cuid())
+  title        String
+  roomId       String?
+  area         String   @default("")
+  category     String   @default("GENERAL")
+  intervalDays Int
+  nextDueDate  String
+  assignedToId String?
+  active       Boolean  @default(true)
+  isDemo       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ───────────────────────────── night audit ─────────────────────────────
+
+model NightAudit {
+  id           String    @id @default(cuid())
+  businessDate String    @unique
+  status       String    @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  startedById  String?
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  steps        String    @default("[]")
+  summary      String    @default("{}")
+  error        String    @default("")
+}

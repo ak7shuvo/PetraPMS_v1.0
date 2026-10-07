@@ -1,0 +1,14 @@
+{
+  "name": "@petra/license-keygen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vendor-only license key generator for PetraPMS. NEVER ship this folder or its keys/ to customers.",
+  "type": "module",
+  "bin": { "petra-keygen": "./keygen.mjs" },
+  "scripts": {
+    "start": "node --experimental-strip-types --no-warnings keygen.mjs"
+  },
+  "dependencies": {
+    "@petra/core": "workspace:*"
+  }
+}

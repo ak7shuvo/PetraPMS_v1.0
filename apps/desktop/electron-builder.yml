@@ -1,0 +1,47 @@
+appId: bd.petrapms.app
+productName: PetraPMS
+copyright: Copyright © PETRA. All rights reserved.
+directories:
+  output: ../../dist
+  buildResources: build
+files:
+  - src/**/*
+  - package.json
+asar: true
+# Electron fuses. runAsNode must stay enabled: the shell starts the bundled Next server with ELECTRON_RUN_AS_NODE.
+electronFuses:
+  runAsNode: true
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+extraResources:
+  - { from: stage/web, to: web }
+  # WinSW service wrapper: copied here by scripts/dist-win.mjs from wherever pnpm installed node-windows (hoisted or not)
+  - { from: vendor/winsw, to: winsw, filter: ["winsw.exe"] }
+win:
+  target: [{ target: nsis, arch: [x64] }]
+  icon: build/icon.png
+  # Code signing: set CSC_LINK / CSC_KEY_PASSWORD (or Azure Trusted Signing) in CI. Unsigned builds work but show SmartScreen warnings.
+  signAndEditExecutable: true
+  legalTrademarks: PetraPMS
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: true
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: PetraPMS
+  uninstallDisplayName: PetraPMS
+  artifactName: PetraPMS-Setup-${version}.${ext}
+  runAfterFinish: true
+  # Uninstall removes the program only. Hotel data lives in %ProgramData%\PetraPMS and is never touched.
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+# Update feed: supplied at release time by scripts/dist-win.mjs from release/release.config.json (or PETRA_UPDATE_URL).
+# Never hard-code a URL here: the release build fails when none is configured.
+publish:
+  provider: generic
+  url: ${env.PETRA_UPDATE_URL}

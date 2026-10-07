@@ -1,0 +1,4 @@
+{
+  "_comment": "SHA-256 of the SPKI DER of DEVELOPMENT public keys. A release build refuses to ship any key listed here. Public data only. Add the fingerprint of any new development key that gets committed.",
+  "development": ["cd2c507925ea505947dc452ad0c6225fda1a215a08ec6bbaecf9b6abe9615864"]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@petra/db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "migrate:new": "node scripts/new-migration.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "@prisma/adapter-pg": "6.19.3",
+    "@prisma/driver-adapter-utils": "6.19.3",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": { "prisma": "6.19.3", "@types/pg": "^8.15.0" }
+}

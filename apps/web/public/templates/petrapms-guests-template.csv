@@ -1,0 +1,2 @@
+﻿title,firstName,lastName,phone,email,gender,dateOfBirth,nationality,idType,idNumber,passportNumber,passportExpiry,visaNumber,visaExpiry,address,city,country,occupation,companyCode,vip,preferences,notes,marketingOptIn
+Mr,Rahim,Uddin,01711223344,rahim@example.com,M,1985-04-12,BD,NID,1990123456789,,,,,"House 12, Road 5, Dhanmondi",Dhaka,BD,Engineer,,0,High floor,,no

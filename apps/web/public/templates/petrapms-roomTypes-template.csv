@@ -1,0 +1,2 @@
+﻿code,name,nameBn,bedType,baseOccupancy,maxAdults,maxChildren,maxOccupancy,baseRate,extraAdultRate,extraChildRate,extraBedRate,amenities,description,active
+DLX,Deluxe,ডিলাক্স,QUEEN,2,3,2,4,6500.00,1200.00,600.00,1000.00,AC;WIFI;TV,"Queen bed, city view",yes
