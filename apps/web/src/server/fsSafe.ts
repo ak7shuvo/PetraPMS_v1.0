@@ -21,18 +21,40 @@ export function assertRegularFile(p: string): void {
 
 const WIN_PROTECTED = [/^[a-z]:\\windows(\\|$)/i, /^[a-z]:\\program files( \(x86\))?(\\|$)/i, /^[a-z]:\\programdata\\microsoft(\\|$)/i, /^[a-z]:\\users\\[^\\]+\\appdata\\(local|roaming)\\(microsoft|programs)(\\|$)/i];
 const POSIX_PROTECTED = ["/bin", "/boot", "/dev", "/etc", "/lib", "/proc", "/root", "/sbin", "/sys", "/usr", "/var/lib", "/var/run"];
+// Windows reserved device names: not usable as a file or folder name on any path segment, with or without an
+// extension (CON, CON.txt, com3, lpt9 are all reserved). A segment ending in a dot or space is also rejected by
+// Windows itself. Checking these ourselves turns a raw ENOENT/EINVAL from fs into a message the admin can act on.
+const WIN_RESERVED_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.[^\\/]*)?$/i;
+
+// On Windows, Node's path.isAbsolute() accepts a drive-relative path such as "/etc" or "\foo" (it resolves against
+// whatever the CURRENT drive happens to be, which is not predictable for a service) as "absolute". We require the
+// drive letter (or a UNC share) to be spelled out, matching the example we show the admin ("D:\PetraBackups").
+const WIN_ROOTED = /^([a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
+/** Exported for testing on any platform: the check itself does not depend on process.platform. */
+export function windowsNameProblem(p: string): string | null {
+  for (const seg of p.split(/[\\/]/).filter(Boolean)) {
+    if (WIN_RESERVED_NAME.test(seg)) return `"${seg}" is a reserved Windows name and cannot be used in a path`;
+    if (/[ .]$/.test(seg)) return `"${seg}" cannot end with a space or a dot on Windows`;
+  }
+  return null;
+}
 
 /** Validates a folder an administrator typed into Settings (backup folder, report export folder). */
 export function validateUserFolder(input: string, what = "Folder"): string {
   const raw = (input ?? "").trim();
   if (!raw) throw new ApiError(400, "BAD_FOLDER", `${what} is empty`);
   if (raw.includes("\0") || raw.length > 260) throw new ApiError(400, "BAD_FOLDER", `${what} is not a valid path`);
-  if (!path.isAbsolute(raw)) throw new ApiError(400, "BAD_FOLDER", `${what} must be a full path such as D:\\PetraBackups`);
+  if (!path.isAbsolute(raw) || (process.platform === "win32" && !WIN_ROOTED.test(raw))) throw new ApiError(400, "BAD_FOLDER", `${what} must be a full path such as D:\\PetraBackups`);
   if (raw.split(/[\\/]/).includes("..")) throw new ApiError(400, "BAD_FOLDER", `${what} must not contain ".."`);
   const p = path.resolve(raw);
   if (path.parse(p).root === p) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be a drive root; create a folder on it first`);
   const protectedHit = process.platform === "win32" ? WIN_PROTECTED.some((r) => r.test(p)) : POSIX_PROTECTED.some((d) => p === d || p.startsWith(d + "/"));
   if (protectedHit) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be inside a system or program folder`);
+  if (process.platform === "win32") {
+    const nameProblem = windowsNameProblem(p);
+    if (nameProblem) throw new ApiError(400, "BAD_FOLDER", `${what}: ${nameProblem}`);
+  }
   const e = env();
   const inside = (a: string, b: string) => a === b || a.startsWith(b + path.sep);
   if (inside(p, path.resolve(e.uploadsDir)) || inside(p, path.resolve(e.logsDir)) || p === path.resolve(e.dataDir)) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be the data, uploads or logs folder itself`);
@@ -41,6 +63,7 @@ export function validateUserFolder(input: string, what = "Folder"): string {
 
 /** The data folder must be a real, writable directory that is not a system location (portable-mode safety). */
 export function validateDataDir(dir: string): void {
+  if (process.platform === "win32" && !WIN_ROOTED.test(String(dir ?? "").trim())) throw new Error(`PETRA_DATA_DIR must be a full path with a drive letter, such as D:\\PetraPMS-Data (got ${dir})`);
   const p = path.resolve(dir);
   if (path.parse(p).root === p) throw new Error(`PETRA_DATA_DIR must not be a drive root (${p})`);
   const bad = process.platform === "win32" ? WIN_PROTECTED.some((r) => r.test(p)) : POSIX_PROTECTED.some((d) => p === d || p.startsWith(d + "/"));

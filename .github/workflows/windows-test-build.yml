@@ -1,25 +1,52 @@
 name: Windows test installer (unsigned)
-# Builds PetraPMS-Setup-TEST-UNSIGNED-<version>.exe on a Windows runner for testing on a real Windows machine.
-# It uses the DEVELOPMENT license key and has no update feed, so it is NOT a customer release.
-# Customer releases use release-windows.yml (tag v*), which is guarded by `pnpm release:check`.
+# Builds PetraPMS-Setup-TEST-UNSIGNED-<version>-<shortsha>.exe on a Windows runner, then installs and exercises the
+# REAL installer (not just the staged bundle) with scripts/installer-smoke.mjs. It uses the DEVELOPMENT license key
+# and has no update feed, so it is NOT a customer release. Customer releases use release-windows.yml (tag v*).
 on:
-  push: { branches: [main] }
+  push: { branches: [main, "ci/**"] }
+  pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+  actions: read # to look up the previous successful run's artifact for the upgrade test (best-effort)
+concurrency:
+  group: win-test-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   win-test-installer:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
       - name: Build web app and stage it
         run: node scripts/build.mjs
-      - name: Smoke test the staged bundle on Windows (server starts, setup, login, PDF, backup)
+      - name: Smoke test the staged bundle (server starts, setup, login, PDF, backup)
         run: node scripts/stage-check.mjs
+        # No continue-on-error: a failing smoke test must make the run red.
+      - name: Look for a previous successful build (best-effort, for the upgrade test)
+        id: prevbuild
+        shell: pwsh
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $runId = gh run list --repo $env:GITHUB_REPOSITORY --workflow windows-test-build.yml --status success --branch main --limit 1 --json databaseId -q '.[0].databaseId'
+          if (-not $runId) { Write-Output "No previous successful run found; the upgrade test will be SKIPPED (not faked)."; exit 0 }
+          gh run download $runId --repo $env:GITHUB_REPOSITORY -n PetraPMS-Setup-TEST-UNSIGNED -D prev-build
+          $exeFile = Get-ChildItem prev-build -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exeFile) {
+            "PETRA_PREV_INSTALLER=$($exeFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Output "Found previous build: $($exeFile.FullName)"
+          } else {
+            Write-Output "Previous run had no installer artifact; the upgrade test will be SKIPPED (not faked)."
+          }
       - name: Package unsigned test installer
         shell: pwsh
         # The last lines of the log are also written as an error annotation so a failure can be read without opening the full log.
@@ -32,8 +59,57 @@ jobs:
           }
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - uses: actions/upload-artifact@v4
+          PETRA_TEST_BUILD_ID: ${{ github.sha }}
+      - name: SHA256SUMS for the test installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Filter *.exe | Select-Object -First 1
+          (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $exe.Name | Out-File -FilePath "dist\$($exe.Name).sha256" -Encoding ascii
+      - name: Real installer smoke test (silent install/upgrade/uninstall/reinstall, server, GUI, name safety)
+        shell: pwsh
+        # PETRA_PREV_INSTALLER, if the lookup step above found one, is already in the job environment via $GITHUB_ENV.
+        run: |
+          $exe = Get-ChildItem dist -Filter *.exe | Select-Object -First 1
+          node scripts/installer-smoke.mjs $exe.FullName
+      - uses: actions/upload-artifact@v7
         with:
           name: PetraPMS-Setup-TEST-UNSIGNED
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/*.sha256
           if-no-files-found: error
+          retention-days: 14
+      - name: Collect logs for diagnosis
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path failure-artifacts | Out-Null
+          if (Test-Path "$env:ProgramData\PetraPMS\logs") { Copy-Item "$env:ProgramData\PetraPMS\logs" -Destination failure-artifacts\programdata-logs -Recurse -ErrorAction SilentlyContinue }
+          if (Test-Path pack.log) { Copy-Item pack.log failure-artifacts\ -ErrorAction SilentlyContinue }
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: PetraPMS-windows-test-failure-logs
+          path: failure-artifacts
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Server-mode Windows Service install/start/stop/remove + firewall rule: a GitHub-hosted runner cannot fully stand
+  # in for real Server-mode hardware (no real LAN, limited service-account behaviour), so this job is explicitly
+  # best-effort and NON-BLOCKING. It never hides inside the job above; a failure here is visible but does not fail CI.
+  windows-service-best-effort-non-blocking:
+    needs: win-test-installer
+    runs-on: windows-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v7
+        with: { name: PetraPMS-Setup-TEST-UNSIGNED, path: dist }
+      - name: Windows Service install/start/stop/remove + firewall rule (best-effort)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Filter *.exe | Select-Object -First 1
+          node scripts/installer-smoke.mjs $exe.FullName --service
