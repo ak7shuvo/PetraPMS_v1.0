@@ -42,6 +42,22 @@ describe("filesystem safety", () => {
     expect(() => validateDataDir("/etc/petra")).toThrow();
     expect(() => validateDataDir(os.tmpdir())).not.toThrow();
   });
+  it("on Windows, requires a drive letter (a bare '/etc' is not a safe path — it resolves against whatever the current drive happens to be)", () => {
+    // Found by the installer smoke-test gate: `pnpm test` had never run on an actual Windows runner before, and a
+    // path like "/etc" is NOT caught by the POSIX-only protected-folder list once process.platform is win32, because
+    // path.resolve("/etc") on Windows becomes "<current drive>:\etc", which matches nothing in WIN_PROTECTED.
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      for (const bad of ["/etc", "/etc/petra", "/usr/lib/x", "\\foo\\bar", "relative\\dir"]) {
+        expect(() => validateUserFolder(bad)).toThrow();
+        expect(() => validateDataDir(bad)).toThrow();
+      }
+      for (const ok of ["D:\\PetraBackups", "\\\\server\\share\\PetraBackups"]) expect(() => validateDataDir(ok)).not.toThrow();
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  });
   it("reports storage health and maps disk errors to friendly messages", () => {
     const h = storageHealth(os.tmpdir());
     expect(h.writable).toBe(true);

@@ -26,6 +26,11 @@ const POSIX_PROTECTED = ["/bin", "/boot", "/dev", "/etc", "/lib", "/proc", "/roo
 // Windows itself. Checking these ourselves turns a raw ENOENT/EINVAL from fs into a message the admin can act on.
 const WIN_RESERVED_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.[^\\/]*)?$/i;
 
+// On Windows, Node's path.isAbsolute() accepts a drive-relative path such as "/etc" or "\foo" (it resolves against
+// whatever the CURRENT drive happens to be, which is not predictable for a service) as "absolute". We require the
+// drive letter (or a UNC share) to be spelled out, matching the example we show the admin ("D:\PetraBackups").
+const WIN_ROOTED = /^([a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
+
 /** Exported for testing on any platform: the check itself does not depend on process.platform. */
 export function windowsNameProblem(p: string): string | null {
   for (const seg of p.split(/[\\/]/).filter(Boolean)) {
@@ -40,7 +45,7 @@ export function validateUserFolder(input: string, what = "Folder"): string {
   const raw = (input ?? "").trim();
   if (!raw) throw new ApiError(400, "BAD_FOLDER", `${what} is empty`);
   if (raw.includes("\0") || raw.length > 260) throw new ApiError(400, "BAD_FOLDER", `${what} is not a valid path`);
-  if (!path.isAbsolute(raw)) throw new ApiError(400, "BAD_FOLDER", `${what} must be a full path such as D:\\PetraBackups`);
+  if (!path.isAbsolute(raw) || (process.platform === "win32" && !WIN_ROOTED.test(raw))) throw new ApiError(400, "BAD_FOLDER", `${what} must be a full path such as D:\\PetraBackups`);
   if (raw.split(/[\\/]/).includes("..")) throw new ApiError(400, "BAD_FOLDER", `${what} must not contain ".."`);
   const p = path.resolve(raw);
   if (path.parse(p).root === p) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be a drive root; create a folder on it first`);
@@ -58,6 +63,7 @@ export function validateUserFolder(input: string, what = "Folder"): string {
 
 /** The data folder must be a real, writable directory that is not a system location (portable-mode safety). */
 export function validateDataDir(dir: string): void {
+  if (process.platform === "win32" && !WIN_ROOTED.test(String(dir ?? "").trim())) throw new Error(`PETRA_DATA_DIR must be a full path with a drive letter, such as D:\\PetraPMS-Data (got ${dir})`);
   const p = path.resolve(dir);
   if (path.parse(p).root === p) throw new Error(`PETRA_DATA_DIR must not be a drive root (${p})`);
   const bad = process.platform === "win32" ? WIN_PROTECTED.some((r) => r.test(p)) : POSIX_PROTECTED.some((d) => p === d || p.startsWith(d + "/"));
