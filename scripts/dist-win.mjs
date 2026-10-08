@@ -25,6 +25,9 @@ if (!testBuild && !fs.existsSync(path.join(root, "apps", "desktop", "stage", ".r
 }
 const s = testBuild ? { updateUrl: "https://updates.invalid/test-build", homepage: "https://test.invalid" } : releaseSettings();
 const desktop = path.join(root, "apps", "desktop");
+// CI sets PETRA_TEST_BUILD_ID (short commit SHA) so each run's artifact has a distinct, traceable name.
+// Not set outside CI, so a local `pnpm build:win:test` keeps the plain PetraPMS-Setup-TEST-UNSIGNED-<version>.exe name.
+const buildId = testBuild && process.env.PETRA_TEST_BUILD_ID ? `-${process.env.PETRA_TEST_BUILD_ID.replace(/[^a-zA-Z0-9]/g, "")}` : "";
 // Locate WinSW (shipped inside node-windows) regardless of the pnpm layout and stage it for electron-builder.
 const winswSrc = [path.join(desktop, "node_modules", "node-windows", "bin", "winsw"), path.join(root, "node_modules", "node-windows", "bin", "winsw")].find((d) => fs.existsSync(path.join(d, "winsw.exe")));
 if (!winswSrc) {
@@ -36,7 +39,7 @@ fs.copyFileSync(path.join(winswSrc, "winsw.exe"), path.join(desktop, "vendor", "
 const releaseJson = path.join(desktop, "src", "release.json");
 if (!testBuild) fs.writeFileSync(releaseJson, JSON.stringify({ updateUrl: s.updateUrl }, null, 2) + "\n"); // test builds ship no feed: updates stay off
 try {
-  await run(pnpm, ["exec", "electron-builder", "--win", "nsis", "--x64", "--config", "electron-builder.yml", `-c.extraMetadata.homepage=${s.homepage}`, ...(testBuild ? ["-c.artifactName=PetraPMS-Setup-TEST-UNSIGNED-${version}.${ext}"] : [])], { cwd: desktop, env: { PETRA_UPDATE_URL: s.updateUrl } });
+  await run(pnpm, ["exec", "electron-builder", "--win", "nsis", "--x64", "--config", "electron-builder.yml", `-c.extraMetadata.homepage=${s.homepage}`, ...(testBuild ? [`-c.artifactName=PetraPMS-Setup-TEST-UNSIGNED-\${version}${buildId}.\${ext}`] : [])], { cwd: desktop, env: { PETRA_UPDATE_URL: s.updateUrl } });
 } finally {
   fs.rmSync(releaseJson, { force: true });
 }

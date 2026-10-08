@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeChild, assertRegularFile, validateUserFolder, validateDataDir, storageHealth } from "@/server/fsSafe";
+import { safeChild, assertRegularFile, validateUserFolder, validateDataDir, storageHealth, windowsNameProblem } from "@/server/fsSafe";
 import { mapSystemError } from "@/server/errors";
 import { readUpload } from "@/server/services/files";
 import { freshApp } from "./helpers";
@@ -32,6 +32,10 @@ describe("filesystem safety", () => {
     const ok = path.join(os.tmpdir(), "petra-backups");
     expect(validateUserFolder(ok)).toBe(ok);
     for (const bad of ["", "relative/dir", os.tmpdir() + "/../x", "/", "/etc", "/usr/lib/x"]) expect(() => validateUserFolder(bad)).toThrow();
+  });
+  it("flags Windows-reserved device names and trailing dot/space in any path segment", () => {
+    for (const bad of ["D:\\PetraBackups\\CON", "D:\\CON.txt\\backups", "D:\\backups\\com3", "D:\\LPT9", "D:\\backups\\nul\\x", "D:\\backups\\x.", "D:\\backups\\x ", "D:\\backups \\x"]) expect(windowsNameProblem(bad)).not.toBeNull();
+    for (const ok of ["D:\\PetraBackups", "D:\\PetraBackups\\Hotel-Dhaka", "D:\\backups\\confirmed", "D:\\backups\\console"]) expect(windowsNameProblem(ok)).toBeNull();
   });
   it("rejects dangerous data directories", () => {
     expect(() => validateDataDir("/")).toThrow();

@@ -21,6 +21,19 @@ export function assertRegularFile(p: string): void {
 
 const WIN_PROTECTED = [/^[a-z]:\\windows(\\|$)/i, /^[a-z]:\\program files( \(x86\))?(\\|$)/i, /^[a-z]:\\programdata\\microsoft(\\|$)/i, /^[a-z]:\\users\\[^\\]+\\appdata\\(local|roaming)\\(microsoft|programs)(\\|$)/i];
 const POSIX_PROTECTED = ["/bin", "/boot", "/dev", "/etc", "/lib", "/proc", "/root", "/sbin", "/sys", "/usr", "/var/lib", "/var/run"];
+// Windows reserved device names: not usable as a file or folder name on any path segment, with or without an
+// extension (CON, CON.txt, com3, lpt9 are all reserved). A segment ending in a dot or space is also rejected by
+// Windows itself. Checking these ourselves turns a raw ENOENT/EINVAL from fs into a message the admin can act on.
+const WIN_RESERVED_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.[^\\/]*)?$/i;
+
+/** Exported for testing on any platform: the check itself does not depend on process.platform. */
+export function windowsNameProblem(p: string): string | null {
+  for (const seg of p.split(/[\\/]/).filter(Boolean)) {
+    if (WIN_RESERVED_NAME.test(seg)) return `"${seg}" is a reserved Windows name and cannot be used in a path`;
+    if (/[ .]$/.test(seg)) return `"${seg}" cannot end with a space or a dot on Windows`;
+  }
+  return null;
+}
 
 /** Validates a folder an administrator typed into Settings (backup folder, report export folder). */
 export function validateUserFolder(input: string, what = "Folder"): string {
@@ -33,6 +46,10 @@ export function validateUserFolder(input: string, what = "Folder"): string {
   if (path.parse(p).root === p) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be a drive root; create a folder on it first`);
   const protectedHit = process.platform === "win32" ? WIN_PROTECTED.some((r) => r.test(p)) : POSIX_PROTECTED.some((d) => p === d || p.startsWith(d + "/"));
   if (protectedHit) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be inside a system or program folder`);
+  if (process.platform === "win32") {
+    const nameProblem = windowsNameProblem(p);
+    if (nameProblem) throw new ApiError(400, "BAD_FOLDER", `${what}: ${nameProblem}`);
+  }
   const e = env();
   const inside = (a: string, b: string) => a === b || a.startsWith(b + path.sep);
   if (inside(p, path.resolve(e.uploadsDir)) || inside(p, path.resolve(e.logsDir)) || p === path.resolve(e.dataDir)) throw new ApiError(400, "BAD_FOLDER", `${what} cannot be the data, uploads or logs folder itself`);
