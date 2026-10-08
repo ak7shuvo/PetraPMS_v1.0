@@ -1,27 +1,171 @@
 name: Windows release
+# Customer release pipeline. Triggers: pushing a tag v* (version must match package.json), or workflow_dispatch for a
+# manual re-run. This is guarded by `pnpm release:check` (see docs/RELEASE.md): it correctly FAILS while the
+# production license key, update feed, homepage or approved icon are still placeholders. Nothing here invents those
+# values. The release it produces is always a DRAFT — a human reviews and tests it before publishing.
 on:
   push: { tags: ["v*"] }
   workflow_dispatch:
+    inputs:
+      allow_unsigned:
+        description: "Ship an UNSIGNED release (SmartScreen will warn customers). Only use this when no code-signing certificate is available yet."
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # never cancel a release build partway through
 jobs:
-  win:
-    runs-on: windows-latest
+  verify-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - id: v
+        shell: bash
+        run: |
+          ROOT=$(node -p "require('./package.json').version")
+          WEB=$(node -p "require('./apps/web/package.json').version")
+          DESK=$(node -p "require('./apps/desktop/package.json').version")
+          echo "root=$ROOT web=$WEB desktop=$DESK"
+          if [ "$ROOT" != "$WEB" ] || [ "$WEB" != "$DESK" ]; then
+            echo "::error::root/apps/web/apps/desktop package.json versions differ ($ROOT / $WEB / $DESK)"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$ROOT" ]; then
+              echo "::error::Tag v$TAG does not match the package.json version ($ROOT)"
+              exit 1
+            fi
+          fi
+          echo "version=$ROOT" >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: verify-version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build:win
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+        env: { CI: "1" }
+      - name: Release guard (must print RELEASE GUARD:OK — fails while vendor placeholders remain, see docs/RELEASE.md)
+        run: pnpm release:check
+
+  build:
+    needs: [verify-version, gate]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Decide signed vs. explicitly-opted-in unsigned
+        id: signing
+        shell: bash
         env:
-          # Optional code signing (see docs/CODE-SIGNING.md). Leave unset for an unsigned build.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-      - run: pnpm build:portable
-      - uses: actions/upload-artifact@v4
+        run: |
+          if [ -n "$CSC_LINK" ] && [ -n "$CSC_KEY_PASSWORD" ]; then
+            echo "unsigned=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.inputs.allow_unsigned }}" = "true" ]; then
+            echo "::warning::No code-signing secrets configured. Building an UNSIGNED release because allow_unsigned=true was set. SmartScreen will warn customers until this is signed."
+            echo "unsigned=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No CSC_LINK/CSC_KEY_PASSWORD secrets configured. Re-run via workflow_dispatch with allow_unsigned=true to ship an unsigned release (see docs/CODE-SIGNING.md), or add the secrets."
+            exit 1
+          fi
+      - name: Build installer and portable ZIP
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          pnpm build:win
+          pnpm build:portable
+      - name: Mark the installer UNSIGNED in its file name (opted-in unsigned release only)
+        if: steps.signing.outputs.unsigned == 'true'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Filter "PetraPMS-Setup-*.exe" | Select-Object -First 1
+          $newName = $exe.Name -replace '\.exe$', '-UNSIGNED.exe'
+          Rename-Item $exe.FullName $newName
+          # latest.yml (the auto-update feed manifest) must not point at an unsigned build: electron-updater verifies
+          # the signature before installing an update, so an unsigned release is never wired into the update feed.
+          Remove-Item dist\latest.yml -ErrorAction SilentlyContinue
+      - name: Verify Authenticode signature (signed releases only)
+        if: steps.signing.outputs.unsigned == 'false'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Filter "PetraPMS-Setup-*.exe" | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          if ($sig.Status -ne 'Valid') { Write-Output "::error title=Signature invalid::installer: $($sig.Status) $($sig.StatusMessage)"; exit 1 }
+      - name: SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist -Include *.exe,*.zip -Recurse
+          $lines = foreach ($f in $files) { (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $f.Name }
+          $lines | Out-File -FilePath dist\SHA256SUMS.txt -Encoding ascii
+      - name: Real installer smoke test (also re-verifies the signature on the INSTALLED exe, for signed releases)
+        shell: pwsh
+        env:
+          PETRA_VERIFY_SIGNATURE: ${{ steps.signing.outputs.unsigned == 'false' && '1' || '0' }}
+        run: |
+          $exe = Get-ChildItem dist -Filter "PetraPMS-Setup-*.exe" | Select-Object -First 1
+          node scripts/installer-smoke.mjs $exe.FullName
+      - uses: actions/upload-artifact@v7
         with:
-          name: PetraPMS-windows
+          name: PetraPMS-windows-release-${{ needs.verify-version.outputs.version }}
           path: |
             dist/*.exe
             dist/*.zip
             dist/latest.yml
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-draft:
+    needs: [verify-version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # only this job can write; everything above is read-only
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: "PetraPMS-windows-release-${{ needs.verify-version.outputs.version }}"
+          path: dist
+      - name: Extract this version's CHANGELOG section
+        run: node scripts/extract-changelog.mjs "${{ needs.verify-version.outputs.version }}" release-notes.md
+      - name: Note unsigned status in the release notes, if applicable
+        shell: bash
+        run: |
+          if ls dist/*-UNSIGNED.exe >/dev/null 2>&1; then
+            { echo ""; echo "**This build is UNSIGNED.** Windows SmartScreen will warn installers; it is not wired to the auto-update feed."; } >> release-notes.md
+          fi
+      - name: Create draft GitHub Release (never published automatically)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${GITHUB_REF_NAME}"; else TAG="v${{ needs.verify-version.outputs.version }}-manual-$(date -u +%Y%m%d%H%M%S)"; fi
+          gh release create "$TAG" dist/*.exe dist/*.zip dist/SHA256SUMS.txt $(ls dist/latest.yml 2>/dev/null || true) \
+            --draft \
+            --title "PetraPMS $TAG" \
+            --notes-file release-notes.md
+          echo "Draft release created: $TAG — review docs/RELEASE-CHECKLIST.md and test on a clean VM before publishing."
