@@ -316,12 +316,18 @@ async function mainSection() {
   return finish();
 }
 
+// GitHub Actions workflow-command escaping for ::error:: (percent, CR, LF per the documented rules).
+const ghaEscape = (s) => String(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+
 function finish() {
   const lines = ["| Row | Result | Detail |", "|---|---|---|", ...results.map((r) => `| ${r.name} | ${r.status} | ${(r.detail || "").replace(/\|/g, "\\|").slice(0, 300)} |`)];
   const table = lines.join("\n");
   console.log("\n" + table);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n## Installer smoke test${serviceOnly ? " — Windows Service (best-effort)" : ""}\n\n${table}\n`);
   const failed = results.filter((r) => r.status === "FAIL");
+  // Full job logs are not always retrievable (e.g. a blob-storage URL blocked by network policy), so every failed row
+  // is ALSO written as a GitHub Actions error annotation — readable from the Checks API without the raw log.
+  for (const r of failed) console.log(`::error title=${ghaEscape(r.name)}::${ghaEscape(r.detail || "(no detail)")}`);
   if (failed.length) {
     console.error(`\n${failed.length} row(s) FAILED.`);
     process.exit(1);
